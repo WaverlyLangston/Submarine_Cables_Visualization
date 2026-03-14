@@ -1,6 +1,6 @@
 
 /* Again, pardon the hardcoded Mapbox token, I forget how to avoid this.*/
-mapboxgl.accessToken = 'pk.eyJ1Ijoid2F2ZWxhbmdzdG9uIiwiYSI6ImNtaTFscTd0aDBtZWsycW9leW5wMTNxY3kifQ.T5Lw5qDw5ral_9ShX19Bvw';
+mapboxgl.accessToken = 'pk.eyJ1Ijoid2F2ZWxhbmdzdG9uIiwiYSI6ImNtbXBzdTRhNDByaTcyb3B3NWtkenZzYzAifQ.rLrgLnjcCmY9dEKqYAjfHw';
 
 /* Build map, using some custom styling, or at least trying to*/
 const map = new mapboxgl.Map({
