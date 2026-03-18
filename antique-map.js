@@ -1,5 +1,4 @@
-
-/* Again, pardon the hardcoded Mapbox token, I forget how to avoid this.*/
+/* Mapbox token*/
 mapboxgl.accessToken = 'pk.eyJ1Ijoid2F2ZWxhbmdzdG9uIiwiYSI6ImNtbXBzdTRhNDByaTcyb3B3NWtkenZzYzAifQ.rLrgLnjcCmY9dEKqYAjfHw';
 
 /* Build map, using some custom styling, or at least trying to*/
@@ -110,8 +109,6 @@ let maxYear = 0;
 /* Extracting the dates, they seem to all be "Month Year" but grabbing 4 digits just in case */
 function parseYear(rfsString) {
     if (!rfsString || rfsString === 'n.a.') return null;
-    
-    // Extract year from various formats
     const match = rfsString.match(/\d{4}/);
     if (match) {
         return parseInt(match[0]);
@@ -176,37 +173,46 @@ function filterCablesByYear(targetYear) {
     }
 }
 
-/* Load, with some attempts at error messages */
-Promise.all([
+/* --- FIX: start both the map load and the data fetches at the same time,
+   then wait for whichever finishes last before adding layers. Previously
+   map.on('load') was registered inside the data Promise, so if the map
+   loaded first (very common) the event fired before the listener existed
+   and nothing was ever drawn. --- */
+
+const mapReady = new Promise(resolve => map.on('load', resolve));
+
+const dataReady = Promise.all([
     fetch('cables-geo.json').then(r => {
-        if (!r.ok) throw new Error(`Failed to load cables-geo.json`);
+        if (!r.ok) throw new Error('Failed to load cables-geo.json');
         return r.json();
     }),
     fetch('landing-points-geo.json').then(r => {
-        if (!r.ok) throw new Error(`Failed to load landing-points-geo.json`);
+        if (!r.ok) throw new Error('Failed to load landing-points-geo.json');
         return r.json();
     }),
     fetch('all.json').then(r => {
-        if (!r.ok) throw new Error(`Failed to load all.json`);
+        if (!r.ok) throw new Error('Failed to load all.json');
         return r.json();
     })
-]).then(([cablesGeo, landingPointsGeo, cablesInfo]) => {
+]);
+
+Promise.all([mapReady, dataReady]).then(([_, [cablesGeo, landingPointsGeo, cablesInfo]]) => {
     cablesData = cablesGeo;
     landingPointsData = landingPointsGeo;
     allCablesInfo = cablesInfo;
-    
-    /* Merging the datasets to ahve all information */
+
+    /* Merging the datasets to have all information */
     const cableInfoMap = {};
     const landingPointYears = {};
-    
+
     cablesInfo.forEach(cable => {
         cableInfoMap[cable.id] = cable;
         const year = parseYear(cable.rfs);
         if (year !== null) {
             minYear = Math.min(minYear, year);
             maxYear = Math.max(maxYear, year);
-            
-            /* Parsing eacch landing point for this cable */
+
+            /* Parsing each landing point for this cable */
             const landingPoints = parseLandingPoints(cable.description || '[]');
             landingPoints.forEach(point => {
                 const pointId = point.id;
@@ -216,7 +222,7 @@ Promise.all([
             });
         }
     });
-    
+
     /* Associating year with cables */
     cablesData.features.forEach(feature => {
         const info = cableInfoMap[feature.properties.id];
@@ -226,21 +232,21 @@ Promise.all([
             feature.properties.year = year || maxYear;
         }
     });
-    
-    /* Associating year with landing point */
+
+    /* Associating year with landing points */
     landingPointsData.features.forEach(feature => {
         const pointId = feature.properties.id;
         feature.properties.year = landingPointYears[pointId] || maxYear;
     });
-    
+
     /* This will change the slider labels when in use */
     document.getElementById('minYear').textContent = minYear;
     document.getElementById('maxYear').textContent = maxYear;
-    
+
     /* Setup slider and make smooth, mapping range of years over width of slider */
     const slider = document.getElementById('yearSlider');
     const currentYearDisplay = document.getElementById('currentYear');
-    
+
     slider.addEventListener('input', (e) => {
         const percent = parseInt(e.target.value);
         if (percent === 100) {
@@ -252,149 +258,149 @@ Promise.all([
             currentYearDisplay.textContent = `Showing cables through ${targetYear}`;
         }
     });
-    
-    map.on('load', () => {
 
-        /* Trying to create a sense of topography, it is difficult */
-        try {
-            map.addSource('mapbox-dem', {
-                'type': 'raster-dem',
-                'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
-                'tileSize': 512,
-                'maxzoom': 14
-            });
-            map.addLayer({
-                'id': 'hillshading',
-                'type': 'hillshade',
-                'source': 'mapbox-dem',
-                'layout': {},
-                'paint': {
-                    'hillshade-shadow-color': '#8b7355',
-                    'hillshade-illumination-anchor': 'viewport',
-                    'hillshade-exaggeration': 0.3,
-                    'hillshade-accent-color': '#c9b896'
-                }
-            });  
-        }   catch (e) {
-                console.log('Could not add hillshade:', e.message);
-        }
-        
-        /* Cable lines */
-        map.addSource('cables', {
-            'type': 'geojson',
-            'data': cablesData
-        });
-               
-        /* Cables layer */
-        map.addLayer({
-            'id': 'cables',
-            'type': 'line',
-            'source': 'cables',
-            'layout': {
-                'line-join': 'round',
-                'line-cap': 'round'
-            },
-            'paint': {
-                'line-color': [
-                    'concat',
-                    '#',
-                    ['get', 'color']
-                ],              
-                'line-width': 2,
-                'line-opacity': 0
-            }
-        });
-        
-        /* It was too hard to click on the cable so I made the area a little wider. */
-        map.addLayer({
-            'id': 'cables-hitarea',
-            'type': 'line',
-            'source': 'cables',
-            'layout': {
-                'line-join': 'round',
-                'line-cap': 'round'
-            },
-            'paint': {
-                'line-color': 'transparent',
-                'line-width': 10,
-                'line-opacity': 0.01
-            }
-        });
-        
-        /* Adding landing points */
-        map.addSource('landing-points', {
-            'type': 'geojson',
-            'data': landingPointsData
+    /* Map is already loaded by the time we get here, so addSource/addLayer are safe to call directly */
+
+    /* Trying to create a sense of topography, it is difficult */
+    try {
+        map.addSource('mapbox-dem', {
+            'type': 'raster-dem',
+            'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+            'tileSize': 512,
+            'maxzoom': 14
         });
         map.addLayer({
-            'id': 'landing-points',
-            'type': 'circle',
-            'source': 'landing-points',
+            'id': 'hillshading',
+            'type': 'hillshade',
+            'source': 'mapbox-dem',
+            'layout': {},
             'paint': {
-                'circle-radius': 3,
-                'circle-color': '#2d5a5a',
-                'circle-stroke-width': 1,
-                'circle-stroke-color': '#fff',
-                'circle-opacity': 0
+                'hillshade-shadow-color': '#8b7355',
+                'hillshade-illumination-anchor': 'viewport',
+                'hillshade-exaggeration': 0.3,
+                'hillshade-accent-color': '#c9b896'
             }
         });
-         
-        /* Made a nice little fade in effect. */
-        setTimeout(() => {         
-            let opacity = 0;
-            const fadeInterval = setInterval(() => {
-                opacity += 0.05;
-                if (opacity >= 0.8) {
-                    opacity = 0.8;
-                    clearInterval(fadeInterval);
-                }
-                try {
-                    map.setPaintProperty('cables', 'line-opacity', opacity);
-                    map.setPaintProperty('cables-hitarea', 'line-opacity', 0.01);
-                    map.setPaintProperty('landing-points', 'circle-opacity', opacity);
-                } catch (e) {
-                    console.error('Animation error:', e);
-                    clearInterval(fadeInterval);
-                }
-            }, 50);
-        }, 500);
-        
-        /* Mouse becmoes pointer when over the clickable area */
-        map.on('mouseenter', 'cables-hitarea', () => {
-            map.getCanvas().style.cursor = 'pointer';
-        });
-        map.on('mouseleave', 'cables-hitarea', () => {
-            map.getCanvas().style.cursor = '';
-        });
-        
-        /* Make the tooltips appear by clicking the cable area */
-        map.on('click', 'cables-hitarea', (e) => {
-            const feature = e.features[0];
-            const coordinates = e.lngLat;
-            
-            new mapboxgl.Popup()
-                .setLngLat(coordinates)
-                .setHTML(createCablePopup(feature.properties))
-                .addTo(map);
-        });
-        
-        /* Repeat tooltip and mouse steps for landing points */
-        map.on('mouseenter', 'landing-points', () => {
-            map.getCanvas().style.cursor = 'pointer';
-        });
-        map.on('mouseleave', 'landing-points', () => {
-            map.getCanvas().style.cursor = '';
-        });
-        map.on('click', 'landing-points', (e) => {
-            const feature = e.features[0];
-            const coordinates = e.lngLat;
-            
-            new mapboxgl.Popup()
-                .setLngLat(coordinates)
-                .setHTML(`<h3>${feature.properties.name}</h3>`)
-                .addTo(map);
-        });
+    } catch (e) {
+        console.log('Could not add hillshade:', e.message);
+    }
+
+    /* Cable lines */
+    map.addSource('cables', {
+        'type': 'geojson',
+        'data': cablesData
     });
+
+    /* Cables layer */
+    map.addLayer({
+        'id': 'cables',
+        'type': 'line',
+        'source': 'cables',
+        'layout': {
+            'line-join': 'round',
+            'line-cap': 'round'
+        },
+        'paint': {
+            'line-color': [
+                'concat',
+                '#',
+                ['get', 'color']
+            ],
+            'line-width': 2,
+            'line-opacity': 0
+        }
+    });
+
+    /* It was too hard to click on the cable so I made the area a little wider. */
+    map.addLayer({
+        'id': 'cables-hitarea',
+        'type': 'line',
+        'source': 'cables',
+        'layout': {
+            'line-join': 'round',
+            'line-cap': 'round'
+        },
+        'paint': {
+            'line-color': 'transparent',
+            'line-width': 10,
+            'line-opacity': 0.01
+        }
+    });
+
+    /* Adding landing points */
+    map.addSource('landing-points', {
+        'type': 'geojson',
+        'data': landingPointsData
+    });
+    map.addLayer({
+        'id': 'landing-points',
+        'type': 'circle',
+        'source': 'landing-points',
+        'paint': {
+            'circle-radius': 3,
+            'circle-color': '#2d5a5a',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#fff',
+            'circle-opacity': 0
+        }
+    });
+
+    /* Made a nice little fade in effect. */
+    setTimeout(() => {
+        let opacity = 0;
+        const fadeInterval = setInterval(() => {
+            opacity += 0.05;
+            if (opacity >= 0.8) {
+                opacity = 0.8;
+                clearInterval(fadeInterval);
+            }
+            try {
+                map.setPaintProperty('cables', 'line-opacity', opacity);
+                map.setPaintProperty('cables-hitarea', 'line-opacity', 0.01);
+                map.setPaintProperty('landing-points', 'circle-opacity', opacity);
+            } catch (e) {
+                console.error('Animation error:', e);
+                clearInterval(fadeInterval);
+            }
+        }, 50);
+    }, 500);
+
+    /* Mouse becomes pointer when over the clickable area */
+    map.on('mouseenter', 'cables-hitarea', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'cables-hitarea', () => {
+        map.getCanvas().style.cursor = '';
+    });
+
+    /* Make the tooltips appear by clicking the cable area */
+    map.on('click', 'cables-hitarea', (e) => {
+        const feature = e.features[0];
+        const coordinates = e.lngLat;
+
+        new mapboxgl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(createCablePopup(feature.properties))
+            .addTo(map);
+    });
+
+    /* Repeat tooltip and mouse steps for landing points */
+    map.on('mouseenter', 'landing-points', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'landing-points', () => {
+        map.getCanvas().style.cursor = '';
+    });
+    map.on('click', 'landing-points', (e) => {
+        const feature = e.features[0];
+        const coordinates = e.lngLat;
+
+        new mapboxgl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(`<h3>${feature.properties.name}</h3>`)
+            .addTo(map);
+    });
+
 }).catch(error => {
     console.error('❌ Error loading data:', error);
 });
